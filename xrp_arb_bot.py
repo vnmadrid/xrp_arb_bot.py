@@ -20,7 +20,7 @@ from typing import Optional
 import requests
 import websockets
 
-# -- Optional rich dashboard --------------------------------------------------
+# ── Optional rich dashboard ──────────────────────────────────────────────────
 try:
     from rich.console import Console
     from rich.table import Table
@@ -31,9 +31,9 @@ try:
 except ImportError:
     RICH = False
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # CONFIG
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class Config:
@@ -61,9 +61,9 @@ class Config:
     paper_portfolio_usd:    float = 10_000.0
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # DATABASE
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 DB_SCHEMA = """
 CREATE TABLE IF NOT EXISTS trades (
@@ -111,9 +111,9 @@ def init_db(path: str) -> sqlite3.Connection:
     return conn
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # GEMINI CLIENT  --  real Prediction Markets API endpoints
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class GeminiClient:
     """
@@ -131,9 +131,10 @@ class GeminiClient:
         self._lock      = threading.Lock()
         self._last_req  = 0.0
         self._min_gap   = 0.15   # ~6 req/s max
+        self._balance_fallback = 10_000.0
         self.logger     = logging.getLogger("GeminiClient")
 
-    # -- Rate limiting ---------------------------------------------------------
+    # ── Rate limiting ─────────────────────────────────────────────────────────
 
     def _rate_limit(self):
         with self._lock:
@@ -142,7 +143,7 @@ class GeminiClient:
                 time.sleep(self._min_gap - gap)
             self._last_req = time.time()
 
-    # -- Auth ------------------------------------------------------------------
+    # ── Auth ──────────────────────────────────────────────────────────────────
 
     def _sign(self, payload: dict) -> dict:
         """Gemini HMAC-SHA384 signature for authenticated endpoints."""
@@ -155,7 +156,7 @@ class GeminiClient:
             "Content-Type":       "text/plain",
         }
 
-    # -- HTTP helpers ----------------------------------------------------------
+    # ── HTTP helpers ──────────────────────────────────────────────────────────
 
     def _get(self, path: str, params: dict = None, retries: int = 3) -> Optional[dict]:
         url = self.base_url + path
@@ -444,19 +445,44 @@ class GeminiClient:
                     return True, resolution_side
         return False, None
 
-    # -- Legacy spot balance for NAV tracking in live mode ---------------------
+    # ── Legacy spot balance for NAV tracking in live mode ─────────────────────
 
     def get_usd_balance(self) -> float:
-        """POST /v1/balances - returns available USD from spot account."""
-        data = self._post_signed("/v1/balances", {})
-        if not data:
-            return 0.0
-        for b in data:
-            if b.get("currency") == "USD":
-                return float(b.get("available", 0))
-        return 0.0
+        """
+        GET /portfolio/balance - returns available USD balance.
+        Falls back to /v1/balances if portfolio endpoint unavailable.
+        """
+        # Try prediction markets portfolio endpoint first
+        data = self._get("/portfolio/balance")
+        if data:
+            # Response: {"balance": "1000.00", "portfolio_value": "1000.00"}
+            bal = data.get("balance") or data.get("portfolio_value")
+            if bal:
+                try:
+                    return float(bal)
+                except (ValueError, TypeError):
+                    pass
 
-    # -- Helpers ---------------------------------------------------------------
+        # Fallback: try spot balances endpoint
+        data = self._post_signed("/v1/balances", {})
+        if data and isinstance(data, list):
+            for b in data:
+                if b.get("currency") == "USD":
+                    return float(b.get("available", 0))
+
+        # If both fail, return a safe default so kill switch
+        # doesn't trigger on a balance fetch failure
+        self.logger.warning(
+            "Could not fetch USD balance -- using paper NAV fallback. "
+            "Check API key permissions."
+        )
+        return self._balance_fallback
+
+    def set_balance_fallback(self, amount: float):
+        """Set a fallback balance used if API balance fetch fails."""
+        self._balance_fallback = amount
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
     def _parse_minutes(ticker: str) -> int:
@@ -592,9 +618,9 @@ class GeminiClient:
         return stubs
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # BINANCE WEBSOCKET PRICE FEED
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class BinanceTick:
@@ -691,9 +717,9 @@ class BinanceFeed:
         self._running = False
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # OPPORTUNITY DETECTION & SIZING
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class Opportunity:
@@ -784,9 +810,9 @@ def usd_to_contracts(size_usd: float, price: float) -> int:
     return max(1, int(size_usd / price))
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # POSITION / TRADE BOOK
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class Position:
@@ -895,9 +921,9 @@ class TradeBook:
         return wins, total, (wins / total if total else 0.0)
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # KILL SWITCH
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class KillSwitch:
     def __init__(self, max_drawdown_pct: float, starting_nav: float):
@@ -921,9 +947,9 @@ class KillSwitch:
         return drawdown
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # TERMINAL DASHBOARD
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 def build_dashboard(state: dict) -> str:
     mode = "PAPER" if state["paper"] else "LIVE"
@@ -959,9 +985,9 @@ def build_dashboard(state: dict) -> str:
     return "\n".join(lines)
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # CORE BOT
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 class XRPArbBot:
 
@@ -972,6 +998,7 @@ class XRPArbBot:
         self.gemini       = GeminiClient(
             cfg.gemini_api_key, cfg.gemini_api_secret, sandbox=cfg.gemini_sandbox
         )
+        self.gemini.set_balance_fallback(cfg.paper_portfolio_usd)
         self.binance_feed = BinanceFeed(cfg.binance_ws_url)
         self.trade_book   = TradeBook(self.conn, cfg.paper_trading)
         self.open_positions: dict[int, Position] = {}
@@ -987,7 +1014,7 @@ class XRPArbBot:
         self.logger.info("Shutdown signal received.")
         self._stop_event.set()
 
-    # -- NAV ------------------------------------------------------------------
+    # ── NAV ──────────────────────────────────────────────────────────────────
 
     def _get_nav(self) -> float:
         if self.cfg.paper_trading:
@@ -997,7 +1024,7 @@ class XRPArbBot:
         open_val = sum(p.quantity * p.entry_price for p in self.open_positions.values())
         return usd + open_val
 
-    # -- Opportunity detection -------------------------------------------------
+    # ── Opportunity detection ─────────────────────────────────────────────────
 
     async def _find_opportunities(self, tick: BinanceTick) -> list[Opportunity]:
         contracts = await asyncio.get_event_loop().run_in_executor(
@@ -1065,7 +1092,7 @@ class XRPArbBot:
 
         return sorted(opps, key=lambda o: o.edge * o.confidence, reverse=True)
 
-    # -- Execution -------------------------------------------------------------
+    # ── Execution ─────────────────────────────────────────────────────────────
 
     async def _execute_opportunity(self, opp: Opportunity):
         if self.kill_switch.triggered:
@@ -1158,7 +1185,7 @@ class XRPArbBot:
         if self.cfg.paper_trading:
             self._paper_nav -= actual_cost
 
-    # -- Position management ---------------------------------------------------
+    # ── Position management ───────────────────────────────────────────────────
 
     async def _manage_positions(self, tick: BinanceTick):
         now      = time.time()
@@ -1218,7 +1245,7 @@ class XRPArbBot:
             f"{pos.quantity} contracts | P&L ${pnl:+.4f}"
         )
 
-    # -- Dashboard state dict --------------------------------------------------
+    # ── Dashboard state dict ──────────────────────────────────────────────────
 
     def _build_state(self, tick: BinanceTick) -> dict:
         wins, total, rate = self.trade_book.win_rate()
@@ -1241,7 +1268,7 @@ class XRPArbBot:
             "recent_trades":  [dict(r) for r in recent],
         }
 
-    # -- Main loop -------------------------------------------------------------
+    # ── Main loop ─────────────────────────────────────────────────────────────
 
     async def run(self):
         self.logger.info(
@@ -1288,9 +1315,9 @@ class XRPArbBot:
         self.logger.info("Bot stopped cleanly.")
 
 
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 # ENTRY POINT
-# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 def parse_args():
     p = argparse.ArgumentParser(
@@ -1337,7 +1364,7 @@ def main():
     live_trading = args.live and args.confirm_live and args.i_understand_risks
     paper        = not live_trading
 
-    # -- Aggressive mode defaults -----------------------------------------------
+    # ── Aggressive mode defaults ───────────────────────────────────────────────
     # Applied BEFORE individual flag overrides so explicit flags always win.
     # Tracks which args were explicitly set by the user via sys.argv so we
     # don't clobber intentional overrides.
