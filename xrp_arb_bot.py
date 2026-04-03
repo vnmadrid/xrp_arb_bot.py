@@ -1,21 +1,3 @@
-# “””
-XRP Latency Arbitrage Bot — Gemini Prediction Markets vs Binance Spot
-
-Monitors Gemini 5m/15m XRP up/down prediction market contracts,
-tracks real-time XRP/USD from Binance WebSocket, and identifies
-edge when Gemini implied probability lags CEX price by > 3%.
-
-API endpoints sourced from:
-https://docs.gemini.com/prediction-markets/markets
-https://docs.gemini.com/prediction-markets/trading
-https://docs.gemini.com/prediction-markets/positions
-
-LIVE TRADING requires three explicit flags:
-–live –confirm-live –i-understand-risks
-
-Paper trading is the default.
-“””
-
 import argparse
 import asyncio
 import hashlib
@@ -38,7 +20,7 @@ from typing import Optional
 import requests
 import websockets
 
-# ── Optional rich dashboard ──────────────────────────────────────────────────
+# – Optional rich dashboard –––––––––––––––––––––––––
 
 try:
 from rich.console import Console
@@ -50,11 +32,11 @@ RICH = True
 except ImportError:
 RICH = False
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 # CONFIG
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 @dataclass
 class Config:
@@ -83,11 +65,11 @@ log_level:              str   = "INFO"
 paper_portfolio_usd:    float = 10_000.0
 ```
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 # DATABASE
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 DB_SCHEMA = “””
 CREATE TABLE IF NOT EXISTS trades (
@@ -133,11 +115,11 @@ conn.executescript(DB_SCHEMA)
 conn.commit()
 return conn
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 # GEMINI CLIENT  –  real Prediction Markets API endpoints
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 class GeminiClient:
 “””
@@ -158,7 +140,7 @@ def __init__(self, api_key: str, api_secret: str, sandbox: bool = True):
     self._min_gap   = 0.15   # ~6 req/s max
     self.logger     = logging.getLogger("GeminiClient")
 
-# ── Rate limiting ─────────────────────────────────────────────────────────
+# -- Rate limiting ---------------------------------------------------------
 
 def _rate_limit(self):
     with self._lock:
@@ -167,7 +149,7 @@ def _rate_limit(self):
             time.sleep(self._min_gap - gap)
         self._last_req = time.time()
 
-# ── Auth ──────────────────────────────────────────────────────────────────
+# -- Auth ------------------------------------------------------------------
 
 def _sign(self, payload: dict) -> dict:
     """Gemini HMAC-SHA384 signature for authenticated endpoints."""
@@ -180,7 +162,7 @@ def _sign(self, payload: dict) -> dict:
         "Content-Type":       "text/plain",
     }
 
-# ── HTTP helpers ──────────────────────────────────────────────────────────
+# -- HTTP helpers ----------------------------------------------------------
 
 def _get(self, path: str, params: dict = None, retries: int = 3) -> Optional[dict]:
     url = self.base_url + path
@@ -469,10 +451,10 @@ def check_order_settled(self, order_id: int) -> tuple[bool, Optional[str]]:
                 return True, resolution_side
     return False, None
 
-# ── Legacy spot balance for NAV tracking in live mode ─────────────────────
+# -- Legacy spot balance for NAV tracking in live mode ---------------------
 
 def get_usd_balance(self) -> float:
-    """POST /v1/balances — returns available USD from spot account."""
+    """POST /v1/balances - returns available USD from spot account."""
     data = self._post_signed("/v1/balances", {})
     if not data:
         return 0.0
@@ -481,7 +463,7 @@ def get_usd_balance(self) -> float:
             return float(b.get("available", 0))
     return 0.0
 
-# ── Helpers ───────────────────────────────────────────────────────────────
+# -- Helpers ---------------------------------------------------------------
 
 @staticmethod
 def _parse_minutes(ticker: str) -> int:
@@ -617,11 +599,11 @@ def _synthetic_contracts(self) -> list[dict]:
     return stubs
 ```
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 # BINANCE WEBSOCKET PRICE FEED
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 @dataclass
 class BinanceTick:
@@ -718,11 +700,11 @@ def stop(self):
     self._running = False
 ```
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 # OPPORTUNITY DETECTION & SIZING
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 @dataclass
 class Opportunity:
@@ -759,7 +741,7 @@ daily_vol = abs(tick.change_24h_pct / 100) or 0.03
 t_years   = (minutes / 60) / 8760
 sigma_t   = daily_vol * math.sqrt(t_years * 365)
 if sigma_t < 1e-9:
-    # No time value — purely intrinsic
+    # No time value - purely intrinsic
     return 1.0 if tick.price >= strike else 0.0
 d2 = log_ret / sigma_t
 # Logistic CDF approximation of N(d2)
@@ -812,11 +794,11 @@ if price <= 0:
 return max(1, int(size_usd / price))
 ```
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 # POSITION / TRADE BOOK
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 @dataclass
 class Position:
@@ -925,11 +907,11 @@ def win_rate(self) -> tuple[int, int, float]:
     return wins, total, (wins / total if total else 0.0)
 ```
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 # KILL SWITCH
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 class KillSwitch:
 def **init**(self, max_drawdown_pct: float, starting_nav: float):
@@ -954,11 +936,11 @@ def update(self, current_nav: float) -> float:
     return drawdown
 ```
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 # TERMINAL DASHBOARD
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 def build_dashboard(state: dict) -> str:
 mode = “PAPER” if state[“paper”] else “LIVE”
@@ -993,11 +975,11 @@ f”{pnl_str:>9} {t[‘status’]}”
 lines.append(”=” * 72)
 return “\n”.join(lines)
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 # CORE BOT
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 class XRPArbBot:
 
@@ -1024,7 +1006,7 @@ def _handle_signal(self, *_):
     self.logger.info("Shutdown signal received.")
     self._stop_event.set()
 
-# ── NAV ──────────────────────────────────────────────────────────────────
+# -- NAV ------------------------------------------------------------------
 
 def _get_nav(self) -> float:
     if self.cfg.paper_trading:
@@ -1034,7 +1016,7 @@ def _get_nav(self) -> float:
     open_val = sum(p.quantity * p.entry_price for p in self.open_positions.values())
     return usd + open_val
 
-# ── Opportunity detection ─────────────────────────────────────────────────
+# -- Opportunity detection -------------------------------------------------
 
 async def _find_opportunities(self, tick: BinanceTick) -> list[Opportunity]:
     contracts = await asyncio.get_event_loop().run_in_executor(
@@ -1050,9 +1032,9 @@ async def _find_opportunities(self, tick: BinanceTick) -> list[Opportunity]:
             continue
 
         # Strike is always known from ticker for HI contracts.
-        # If somehow missing, skip — we can't evaluate without it.
+        # If somehow missing, skip - we can't evaluate without it.
         if strike <= 0:
-            self.logger.debug(f"Skipping {contract['symbol']} — no strike price")
+            self.logger.debug(f"Skipping {contract['symbol']} - no strike price")
             continue
 
         # CEX-implied P(XRP_expiry >= strike)
@@ -1102,7 +1084,7 @@ async def _find_opportunities(self, tick: BinanceTick) -> list[Opportunity]:
 
     return sorted(opps, key=lambda o: o.edge * o.confidence, reverse=True)
 
-# ── Execution ─────────────────────────────────────────────────────────────
+# -- Execution -------------------------------------------------------------
 
 async def _execute_opportunity(self, opp: Opportunity):
     if self.kill_switch.triggered:
@@ -1195,7 +1177,7 @@ async def _execute_opportunity(self, opp: Opportunity):
     if self.cfg.paper_trading:
         self._paper_nav -= actual_cost
 
-# ── Position management ───────────────────────────────────────────────────
+# -- Position management ---------------------------------------------------
 
 async def _manage_positions(self, tick: BinanceTick):
     now      = time.time()
@@ -1255,7 +1237,7 @@ async def _close_position(self, pos: Position, tick: BinanceTick):
         f"{pos.quantity} contracts | P&L ${pnl:+.4f}"
     )
 
-# ── Dashboard state dict ──────────────────────────────────────────────────
+# -- Dashboard state dict --------------------------------------------------
 
 def _build_state(self, tick: BinanceTick) -> dict:
     wins, total, rate = self.trade_book.win_rate()
@@ -1278,7 +1260,7 @@ def _build_state(self, tick: BinanceTick) -> dict:
         "recent_trades":  [dict(r) for r in recent],
     }
 
-# ── Main loop ─────────────────────────────────────────────────────────────
+# -- Main loop -------------------------------------------------------------
 
 async def run(self):
     self.logger.info(
@@ -1325,11 +1307,11 @@ async def run(self):
     self.logger.info("Bot stopped cleanly.")
 ```
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 # ENTRY POINT
 
-# ─────────────────────────────────────────────────────────────────────────────
+# —————————————————————————–
 
 def parse_args():
 p = argparse.ArgumentParser(
@@ -1378,7 +1360,7 @@ logging.basicConfig(
 live_trading = args.live and args.confirm_live and args.i_understand_risks
 paper        = not live_trading
 
-# ── Aggressive mode defaults ───────────────────────────────────────────────
+# -- Aggressive mode defaults -----------------------------------------------
 # Applied BEFORE individual flag overrides so explicit flags always win.
 # Tracks which args were explicitly set by the user via sys.argv so we
 # don't clobber intentional overrides.
